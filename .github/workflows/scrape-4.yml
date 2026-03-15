@@ -1,0 +1,58 @@
+name: "Scraper 4: 2022-2023"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - uses: browser-actions/setup-firefox@v1
+        with:
+          firefox-version: 'latest'
+      - uses: browser-actions/setup-geckodriver@latest
+
+      - name: Restore previous data
+        uses: actions/download-artifact@v4
+        with:
+          name: iddaa-2022-2023
+          path: output/
+        continue-on-error: true
+
+      - name: Run scraper
+        run: |
+          mkdir -p output
+          python scraper_cli.py \
+            --start 2022-08-01 \
+            --end 2023-07-31 \
+            --output output/iddaa_2022_2023.xlsx \
+            --max-hours 5.5 \
+            --resume
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: iddaa-2022-2023
+          path: |
+            output/iddaa_2022_2023.xlsx
+            progress.json
+          retention-days: 90
+          overwrite: true
+
+      - name: Commit to repo
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f output/iddaa_2022_2023.xlsx progress.json || true
+          git diff --staged --quiet || git commit -m "Scraper 4: 2022-2023 $(date +'%Y-%m-%d %H:%M')"
+          git push || true
