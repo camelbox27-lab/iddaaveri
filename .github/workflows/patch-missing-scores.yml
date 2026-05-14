@@ -33,12 +33,38 @@ jobs:
           path: ./
         continue-on-error: true
 
+      - name: Download main excel via GitHub API (LFS/large file)
+        run: |
+          mkdir -p output
+          # Onceki patch'li dosya zaten varsa kullan
+          if [ -f output/iddaagecmismaclar_patched.xlsx ]; then
+            echo "Patched dosya mevcut, resume yapilacak"
+          elif [ -f output/iddaagecmismaclar_clean.xlsx ]; then
+            echo "Clean dosya mevcut"
+          else
+            echo "Ana Excel bulunamadi - GitHub Releases veya LFS'den indirmeyi dene"
+            # Repodaki output/ klasorunden indirmeyi dene (git lfs varsa)
+            git lfs pull --include="output/iddaagecmismaclar_clean.xlsx" 2>/dev/null || true
+            # Hala yoksa ham xlsx'i dene
+            if [ ! -f output/iddaagecmismaclar_clean.xlsx ]; then
+              curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                -L "https://raw.githubusercontent.com/camelbox27-lab/iddaaveri/main/output/iddaagecmismaclar_clean.xlsx" \
+                -o output/iddaagecmismaclar_clean.xlsx 2>/dev/null || true
+            fi
+            ls -lh output/ || true
+          fi
+
       - name: Run patch script
         run: |
           mkdir -p output
-          # Girdi: clean excel (repoda var), cikti: ayni dosyanin guncellenmisi
+          # Girdi secimi: patched > clean > ham
+          INPUT="output/iddaagecmismaclar_clean.xlsx"
+          if [ -f output/iddaagecmismaclar_patched.xlsx ]; then
+            INPUT="output/iddaagecmismaclar_patched.xlsx"
+            echo "Girdi: patched (resume)"
+          fi
           python scripts/patch_missing_scores.py \
-            --input output/iddaagecmismaclar_clean.xlsx \
+            --input "$INPUT" \
             --output output/iddaagecmismaclar_patched.xlsx \
             --progress progress_patch.json \
             --max-hours 5.5 \
