@@ -1,0 +1,113 @@
+name: "FINAL: Tum Verileri Birlestir (2017-2026)"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install pandas openpyxl numpy
+
+      # ── Tum kaynak dosyalari artifact'lardan indir ──────────────────────────
+
+      - name: Download patched clean excel
+        uses: actions/download-artifact@v4
+        with:
+          name: patch-clean-excel
+          path: output/
+        continue-on-error: true
+
+      - name: Download eksik 2017-08/2018-03
+        uses: actions/download-artifact@v4
+        with:
+          name: eksik-2017-08-2018-03
+          path: output/
+        continue-on-error: true
+
+      - name: Download eksik 2018-04/2018-11
+        uses: actions/download-artifact@v4
+        with:
+          name: eksik-2018-04-2018-11
+          path: output/
+        continue-on-error: true
+
+      - name: Download eksik 2018-12/2019-07
+        uses: actions/download-artifact@v4
+        with:
+          name: eksik-2018-12-2019-07
+          path: output/
+        continue-on-error: true
+
+      - name: Download guncel 2026-03/2026-05
+        uses: actions/download-artifact@v4
+        with:
+          name: guncel-2026-03-2026-05
+          path: output/
+        continue-on-error: true
+
+      - name: Download UEFA 2017-2019
+        uses: actions/download-artifact@v4
+        with:
+          name: uefa-2017-2019
+          path: output/
+        continue-on-error: true
+
+      - name: Download UEFA 2019-2022
+        uses: actions/download-artifact@v4
+        with:
+          name: uefa-2019-2022
+          path: output/
+        continue-on-error: true
+
+      - name: Download UEFA 2022-2026
+        uses: actions/download-artifact@v4
+        with:
+          name: uefa-2022-2026
+          path: output/
+        continue-on-error: true
+
+      - name: List available files
+        run: |
+          echo "=== output/ icerik ==="
+          ls -lh output/ || echo "(bos)"
+
+      - name: Run merge script
+        run: |
+          mkdir -p output
+          # Repo'daki clean excel yoksa download edilen patch'li versiyonu kullan
+          if [ ! -f output/iddaagecmismaclar_clean.xlsx ]; then
+            echo "Clean excel repoda yok, patch'li versiyon kullanılacak"
+            cp output/iddaagecmismaclar_patched.xlsx output/iddaagecmismaclar_clean.xlsx 2>/dev/null || true
+          fi
+          python scripts/merge_all.py
+
+      - name: Upload final Excel
+        uses: actions/upload-artifact@v4
+        with:
+          name: iddaa-FINAL-2017-2026
+          path: output/iddaagecmismaclar_FINAL.xlsx
+          retention-days: 365
+          overwrite: true
+
+      - name: Show file size
+        run: |
+          ls -lh output/iddaagecmismaclar_FINAL.xlsx || echo "Final dosya bulunamadi"
+
+      - name: Commit final Excel to repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f output/iddaagecmismaclar_FINAL.xlsx || true
+          git diff --staged --quiet || git commit -m "FINAL: 2017-2026 tam veri birlestirildi $(date +'%Y-%m-%d %H:%M')"
+          git push || true

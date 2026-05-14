@@ -965,12 +965,13 @@ def _throttle_ok():
 
 # ── Row validation ────────────────────────────────────────────────────────────
 def _row_is_valid(r: dict) -> bool:
-    iy = (r.get('ilk_yari_skor') or '').strip()
-    ms = (r.get('mac_skoru') or '').strip()
-    if not iy or not ms:
+    # En az ev sahibi + deplasman + MS kodu olmali
+    if not r.get('ev_sahibi') or not r.get('konuk_ekip'):
         return False
+    # MS kodu veya en az bir oran varsa kabul et (eski maclar IY/MS skorsuz olabilir)
+    has_code = bool((r.get('ms_kodu') or '').strip())
     has_odds = any(r.get(k) for k in ('ms1', 'ms0', 'ms2'))
-    return has_odds
+    return has_code or has_odds
 
 # ── Match detail scraper ─────────────────────────────────────────────────────
 def scrape_match_fast(summary: dict, match_date=None, market_keys=None,
@@ -1135,7 +1136,10 @@ def export_excel(rows: list[dict], path: Path, market_keys: set[str] | None = No
     wb.save(path)
 
 # ── Progress save/resume ─────────────────────────────────────────────────────
-PROGRESS_FILE = BASE_DIR / "progress.json"
+# Progress dosyasi output dosyasina gore unique — workflow'lar birbirini ezmez
+def _progress_file(output_path: str) -> Path:
+    stem = Path(output_path).stem
+    return BASE_DIR / f"progress_{stem}.json"
 
 def save_progress(last_date: dt.date, end_date: dt.date, total: int, output_file: str):
     data = {
@@ -1145,12 +1149,13 @@ def save_progress(last_date: dt.date, end_date: dt.date, total: int, output_file
         'output_file': output_file,
         'timestamp': dt.datetime.now().isoformat(),
     }
-    PROGRESS_FILE.write_text(json.dumps(data, indent=2), encoding='utf-8')
+    _progress_file(output_file).write_text(json.dumps(data, indent=2), encoding='utf-8')
 
-def load_progress() -> dict | None:
-    if PROGRESS_FILE.exists():
+def load_progress(output_file: str = '') -> dict | None:
+    pf = _progress_file(output_file) if output_file else BASE_DIR / "progress.json"
+    if pf.exists():
         try:
-            return json.loads(PROGRESS_FILE.read_text(encoding='utf-8'))
+            return json.loads(pf.read_text(encoding='utf-8'))
         except Exception:
             pass
     return None
@@ -1168,20 +1173,50 @@ def run_scraper(start: dt.date, end: dt.date, output_path: str,
     total = 0
     driver = None
 
-    # Onceki partial Excel varsa yukle
+    # Onceki partial Excel varsa yukle — tarih + takim key ile dedup
     output = Path(output_path)
+    existing_keys: set[str] = set()
+
     if output.exists():
         try:
-            from openpyxl import load_workbook
-            wb = load_workbook(output, read_only=True)
+            from openpyxl import load_workbook as _lw
+            wb = _lw(output, read_only=True, data_only=True)
             ws = wb.active
-            headers_row = [c.value for c in ws[1]]
-            for row in ws.iter_rows(min_row=2, values_only=True):
-                r = {KEYS[i]: (row[i] if i < len(row) else '') for i in range(min(len(KEYS), len(row)))}
+            _hdr = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+            # KEYS sirasina gore map et (eski dosyalar farkli header olabilir)
+            try:
+                _col_map = {k: _hdr.index(h) for k, h in zip(KEYS, HEADERS) if h in _hdr}
+            except Exception:
+                _col_map = {KEYS[i]: i for i in range(len(KEYS))}
+            for _row in ws.iter_rows(min_row=2, values_only=True):
+                r = {}
+                for k, ci in _col_map.items():
+                    r[k] = _row[ci] if ci < len(_row) else ''
                 rows.append(r)
+                # Dedup key: ev+deplasman+tarih+saat
+                _dk = f"{r.get('ev_sahibi','')}|{r.get('konuk_ekip','')}|{r.get('mac_tarihi','')}|{r.get('mac_saati','')}"
+                existing_keys.add(_dk.lower().strip())
             wb.close()
             total = len(rows)
             print(f"Onceki dosyadan {total} mac yuklendi", flush=True)
+
+            # Yuklenen son tarihe gore start'i ileri al (en guvvenli resume)
+            if rows:
+                last_dates = []
+                for r in rows:
+                    td = r.get('mac_tarihi', '')
+                    if td:
+                        try:
+                            last_dates.append(dt.datetime.strptime(str(td), '%d.%m.%Y').date())
+                        except Exception:
+                            pass
+                if last_dates:
+                    last_scraped = max(last_dates)
+                    if last_scraped >= start:
+                        new_start = last_scraped + dt.timedelta(days=1)
+                        if new_start > start:
+                            print(f"  Resume: son scraped={last_scraped}, start {start} -> {new_start}", flush=True)
+                            start = new_start
         except Exception as e:
             print(f"Onceki dosya okunamadi: {e}", flush=True)
 
@@ -1274,9 +1309,12 @@ def run_scraper(start: dt.date, end: dt.date, output_path: str,
                         if r.pop('_http_failed', False):
                             http_failed.append(r)
                         elif _row_is_valid(r):
-                            rows.append(r)
-                            total += 1
-                            day_matches += 1
+                            _dk = f"{r.get('ev_sahibi','')}|{r.get('konuk_ekip','')}|{r.get('mac_tarihi','')}|{r.get('mac_saati','')}".lower().strip()
+                            if _dk not in existing_keys:
+                                rows.append(r)
+                                existing_keys.add(_dk)
+                                total += 1
+                                day_matches += 1
                     except Exception:
                         done_count += 1
 
@@ -1292,9 +1330,12 @@ def run_scraper(start: dt.date, end: dt.date, output_path: str,
                     # Selenium calisiyor, geri kalanlari da cek
                     first.update(sel0)
                     if _row_is_valid(first):
-                        rows.append(first)
-                        total += 1
-                        day_matches += 1
+                        _dk0 = f"{first.get('ev_sahibi','')}|{first.get('konuk_ekip','')}|{first.get('mac_tarihi','')}|{first.get('mac_saati','')}".lower().strip()
+                        if _dk0 not in existing_keys:
+                            rows.append(first)
+                            existing_keys.add(_dk0)
+                            total += 1
+                            day_matches += 1
                     print(f'  [{cur:%d.%m.%Y}] {len(http_failed)} mac Selenium fallback...', flush=True)
                     for r in http_failed[1:]:
                         url = r.get('iddaa_link', '')
@@ -1304,9 +1345,12 @@ def run_scraper(start: dt.date, end: dt.date, output_path: str,
                         if sel_data:
                             r.update(sel_data)
                         if _row_is_valid(r):
-                            rows.append(r)
-                            total += 1
-                            day_matches += 1
+                            _dk = f"{r.get('ev_sahibi','')}|{r.get('konuk_ekip','')}|{r.get('mac_tarihi','')}|{r.get('mac_saati','')}".lower().strip()
+                            if _dk not in existing_keys:
+                                rows.append(r)
+                                existing_keys.add(_dk)
+                                total += 1
+                                day_matches += 1
                     # Ana sayfaya geri don
                     try:
                         pick_date(d, cur)
@@ -1318,8 +1362,8 @@ def run_scraper(start: dt.date, end: dt.date, output_path: str,
 
             print(f'  -> {day_matches} gecerli mac (toplam: {total})', flush=True)
 
-            # Her 7 gunde bir ara kayit
-            if day_count % 7 == 0:
+            # Her 5 gunde bir ara kayit
+            if day_count % 5 == 0:
                 export_excel(rows, output)
                 save_progress(cur, end, total, output_path)
                 print(f'  [KAYIT] {total} mac kaydedildi', flush=True)
@@ -1353,13 +1397,13 @@ def main():
     start = dt.datetime.strptime(args.start, '%Y-%m-%d').date()
     end = dt.datetime.strptime(args.end, '%Y-%m-%d').date()
 
-    # Resume: onceki calismayi yukle
+    # Resume: progress dosyasina bak (output xlsx'e gore unique dosya)
+    # Asil resume mantigi run_scraper icinde xlsx'ten yapiliyor, bu sadece log
     if args.resume:
-        prog = load_progress()
+        prog = load_progress(args.output)
         if prog:
             last = dt.datetime.strptime(prog['last_date'], '%Y-%m-%d').date()
-            start = last + dt.timedelta(days=1)
-            print(f"Devam ediliyor: {start:%d.%m.%Y}'den itibaren ({prog['total_matches']} mac mevcut)", flush=True)
+            print(f"Progress dosyasi: son={last:%d.%m.%Y}, {prog.get('total_matches',0)} mac", flush=True)
 
     # Output klasorunu olustur
     output = Path(args.output)

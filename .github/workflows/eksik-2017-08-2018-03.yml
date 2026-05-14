@@ -1,0 +1,77 @@
+name: "Eksik: 2017-08 → 2018-03 (8 ay)"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - uses: browser-actions/setup-firefox@v1
+        with:
+          firefox-version: 'latest'
+
+      - uses: browser-actions/setup-geckodriver@latest
+
+      - name: Restore previous progress
+        uses: actions/download-artifact@v4
+        with:
+          name: eksik-2017-08-2018-03
+          path: output/
+        continue-on-error: true
+
+      - name: Restore progress file
+        uses: actions/download-artifact@v4
+        with:
+          name: eksik-2017-08-2018-03-progress
+          path: ./
+        continue-on-error: true
+
+      - name: Run scraper
+        run: |
+          mkdir -p output
+          python scraper_cli.py \
+            --start 2017-08-01 \
+            --end 2018-03-31 \
+            --output output/eksik_2017_08_2018_03.xlsx \
+            --max-hours 5.5 \
+            --resume
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eksik-2017-08-2018-03
+          path: output/eksik_2017_08_2018_03.xlsx
+          retention-days: 90
+          overwrite: true
+
+      - name: Upload progress file
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eksik-2017-08-2018-03-progress
+          path: progress_eksik_2017_08_2018_03.json
+          retention-days: 90
+          overwrite: true
+
+      - name: Commit to repo
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f output/eksik_2017_08_2018_03.xlsx progress_eksik_2017_08_2018_03.json || true
+          git diff --staged --quiet || git commit -m "eksik veri: 2017-08/2018-03 $(date +'%Y-%m-%d %H:%M')"
+          git push || true

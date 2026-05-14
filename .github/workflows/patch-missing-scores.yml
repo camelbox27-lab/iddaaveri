@@ -1,0 +1,73 @@
+name: "Patch: Eksik IY/MS Skorlari Doldur"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install requests pandas openpyxl beautifulsoup4
+
+      - name: Restore patched file (resume)
+        uses: actions/download-artifact@v4
+        with:
+          name: patch-clean-excel
+          path: output/
+        continue-on-error: true
+
+      - name: Restore progress file
+        uses: actions/download-artifact@v4
+        with:
+          name: patch-progress
+          path: ./
+        continue-on-error: true
+
+      - name: Run patch script
+        run: |
+          mkdir -p output
+          # Girdi: clean excel (repoda var), cikti: ayni dosyanin guncellenmisi
+          python scripts/patch_missing_scores.py \
+            --input output/iddaagecmismaclar_clean.xlsx \
+            --output output/iddaagecmismaclar_patched.xlsx \
+            --progress progress_patch.json \
+            --max-hours 5.5 \
+            --workers 6 \
+            --resume
+
+      - name: Upload patched Excel
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: patch-clean-excel
+          path: output/iddaagecmismaclar_patched.xlsx
+          retention-days: 90
+          overwrite: true
+
+      - name: Upload progress file
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: patch-progress
+          path: progress_patch.json
+          retention-days: 90
+          overwrite: true
+
+      - name: Commit to repo
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f output/iddaagecmismaclar_patched.xlsx progress_patch.json || true
+          git diff --staged --quiet || git commit -m "patch: eksik IY/MS skorlar guncellendi $(date +'%Y-%m-%d %H:%M')"
+          git push || true
