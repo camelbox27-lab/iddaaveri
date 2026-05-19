@@ -30,6 +30,16 @@ BASE_DIR    = Path(__file__).resolve().parent.parent
 OUTPUT_DIR  = BASE_DIR / "output"
 FINAL_PATH  = OUTPUT_DIR / "iddaagecmismaclar_FINAL.xlsx"
 
+# 2010-2016 expand sezonlari
+EXPAND_SEASONS = [
+    "iddaa_2010_2011.xlsx",
+    "iddaa_2011_2012.xlsx",
+    "iddaa_2012_2013.xlsx",
+    "iddaa_2013_2014.xlsx",
+    "iddaa_2014_2015.xlsx",
+    "iddaa_2015_2016.xlsx",
+]
+
 HEADERS_ORDER = [
     "Ev Sahibi", "Deplasman", "Tarih", "Saat", "Lig",
     "MS Kodu", "IY Skor", "MS Skor",
@@ -189,7 +199,7 @@ def save_final_excel(df: pd.DataFrame, path: Path):
 def main():
     print("=" * 65)
     print("FINAL MERGE: Tum Veriler Birlestiriliyor")
-    print(f"Hedef: 2017-08-01 - 2026-05-14")
+    print(f"Hedef: 2010-08-01 - 2026-12-31")
     print("=" * 65)
 
     # ── Dosya listesi (oncelik sirasi: daha gec / daha tam olanlar once) ──
@@ -198,7 +208,7 @@ def main():
         (OUTPUT_DIR / "iddaagecmismaclar_patched.xlsx", "patched"),
         # Patch yapilmamissa clean versiyonu dene
         (OUTPUT_DIR / "iddaagecmismaclar_clean.xlsx",   "clean"),
-        # Eksik donemler
+        # Eksik donemler (2017-2019)
         (OUTPUT_DIR / "eksik_2017_08_2018_03.xlsx",     "eksik-1"),
         (OUTPUT_DIR / "eksik_2018_04_2018_11.xlsx",     "eksik-2"),
         (OUTPUT_DIR / "eksik_2018_12_2019_07.xlsx",     "eksik-3"),
@@ -206,14 +216,23 @@ def main():
         (OUTPUT_DIR / "guncel_2026_03_2026_05.xlsx",    "guncel"),
     ]
 
+    # 2010-2016 expand sezonlari varsa ekle
+    for fname in EXPAND_SEASONS:
+        p = OUTPUT_DIR / fname
+        if p.exists():
+            sources.append((p, f"expand-{p.stem}"))
+
     # UEFA dosyalari varsa ekle
     for uefa_path in sorted(OUTPUT_DIR.glob("iddaa_uefa_*.xlsx")):
         sources.append((uefa_path, f"uefa-{uefa_path.stem}"))
 
-    # Eski rescrape dosyalari varsa ekle (iddaa_YYYY_YYYY.xlsx)
+    # Diger rescrape dosyalari varsa ekle (iddaa_YYYY_YYYY.xlsx)
+    already_added = {Path(s[0]).stem for s in sources}
     for extra in sorted(OUTPUT_DIR.glob("iddaa_2*.xlsx")):
-        if extra.stem not in ('iddaagecmismaclar_FINAL', 'iddaagecmismaclar'):
+        skip_stems = ('iddaagecmismaclar_FINAL', 'iddaagecmismaclar')
+        if extra.stem not in skip_stems and extra.stem not in already_added:
             sources.append((extra, f"extra-{extra.stem}"))
+            already_added.add(extra.stem)
 
     print(f"\n[1] Dosyalar yukleniyor...")
     dfs = []
@@ -230,10 +249,11 @@ def main():
     df_all = pd.concat(dfs, ignore_index=True)
     print(f"    Ham toplam: {len(df_all):,} satir", flush=True)
 
-    # ── Tarih filtresi: 2017-08-01 ile 2026-05-14 ──
-    print(f"\n[3] Tarih filtresi uygulanıyor (2017-08-01 → 2026-05-14)...")
-    start_filter = dt.date(2017, 8, 1)
-    end_filter   = dt.date(2026, 5, 14)
+    # ── Tarih filtresi: 2010-08-01 ile bugun ──
+    today = dt.date.today()
+    print(f"\n[3] Tarih filtresi uygulanıyor (2010-08-01 → {today})...")
+    start_filter = dt.date(2010, 8, 1)
+    end_filter   = today
 
     def in_range(val) -> bool:
         d = parse_date(val)

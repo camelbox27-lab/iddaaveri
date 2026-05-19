@@ -1,4 +1,4 @@
-name: "FINAL: Tum Verileri Birlestir (2017-2026)"
+name: "FINAL: Tum Verileri Birlestir (2010-2026)"
 
 on:
   workflow_dispatch:
@@ -77,6 +77,55 @@ jobs:
           path: output/
         continue-on-error: true
 
+      - name: Download expand 2010-2011
+        uses: actions/download-artifact@v4
+        with:
+          name: iddaa-2010-2011
+          path: output/
+        continue-on-error: true
+
+      - name: Download expand 2011-2012
+        uses: actions/download-artifact@v4
+        with:
+          name: iddaa-2011-2012
+          path: output/
+        continue-on-error: true
+
+      - name: Download expand 2012-2013
+        uses: actions/download-artifact@v4
+        with:
+          name: iddaa-2012-2013
+          path: output/
+        continue-on-error: true
+
+      - name: Download expand 2013-2014
+        uses: actions/download-artifact@v4
+        with:
+          name: iddaa-2013-2014
+          path: output/
+        continue-on-error: true
+
+      - name: Download expand 2014-2015
+        uses: actions/download-artifact@v4
+        with:
+          name: iddaa-2014-2015
+          path: output/
+        continue-on-error: true
+
+      - name: Download expand 2015-2016
+        uses: actions/download-artifact@v4
+        with:
+          name: iddaa-2015-2016
+          path: output/
+        continue-on-error: true
+
+      - name: Download rescrape 2016-2017
+        uses: actions/download-artifact@v4
+        with:
+          name: iddaa-2016-2017
+          path: output/
+        continue-on-error: true
+
       - name: List available files
         run: |
           echo "=== output/ icerik ==="
@@ -95,7 +144,7 @@ jobs:
       - name: Upload final Excel
         uses: actions/upload-artifact@v4
         with:
-          name: iddaa-FINAL-2017-2026
+          name: iddaa-FINAL-2010-2026
           path: output/iddaagecmismaclar_FINAL.xlsx
           retention-days: 365
           overwrite: true
@@ -109,5 +158,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -f output/iddaagecmismaclar_FINAL.xlsx || true
-          git diff --staged --quiet || git commit -m "FINAL: 2017-2026 tam veri birlestirildi $(date +'%Y-%m-%d %H:%M')"
+          git diff --staged --quiet || git commit -m "FINAL: 2010-2026 tam veri birlestirildi $(date +'%Y-%m-%d %H:%M')"
           git push || true
