@@ -1,0 +1,184 @@
+name: "Günlük Otomatik: Dünün Maçları"
+
+on:
+  schedule:
+    - cron: '30 20 * * *'  # Her gün 23:30 TR (20:30 UTC)
+  workflow_dispatch:        # Manuel tetiklemek için de açık
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - uses: browser-actions/setup-firefox@v1
+        with:
+          firefox-version: 'latest'
+
+      - uses: browser-actions/setup-geckodriver@latest
+
+      - name: Restore previous daily file
+        uses: actions/download-artifact@v4
+        with:
+          name: gunluk-otomatik-latest
+          path: output/
+        continue-on-error: true
+
+      - name: Run scraper (dün)
+        run: |
+          mkdir -p output
+          DUN=$(date -d 'yesterday' +'%Y-%m-%d')
+          echo "Çekilen tarih: $DUN"
+          python scraper_cli.py \
+            --start $DUN \
+            --end $DUN \
+            --output output/gunluk_$DUN.xlsx \
+            --max-hours 1.5
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gunluk-otomatik-latest
+          path: output/gunluk_*.xlsx
+          retention-days: 30
+          overwrite: true
+
+      - name: Merge into iddaagecmismaclar_FINAL
+        run: |
+          python - <<'PYEOF'
+          import glob, sys, datetime as dt
+          from pathlib import Path
+          import pandas as pd
+          from openpyxl import load_workbook, Workbook
+          from openpyxl.styles import PatternFill, Font, Alignment
+          import numpy as np
+
+          OUTPUT = Path("output")
+          FINAL  = OUTPUT / "iddaagecmismaclar_FINAL.xlsx"
+
+          HEADERS = [
+              "Ev Sahibi", "Deplasman", "Tarih", "Saat", "Lig",
+              "MS Kodu", "IY Skor", "MS Skor",
+              "MS1", "MS0", "MS2",
+              "CS 1X", "CS 12", "CS X2",
+              "IY1", "IY0", "IY2",
+              "AU 0.5 Alt", "AU 0.5 Ust", "AU 1.5 Alt", "AU 1.5 Ust",
+              "AU 2.5 Alt", "AU 2.5 Ust", "AU 3.5 Alt", "AU 3.5 Ust",
+              "AU 4.5 Alt", "AU 4.5 Ust",
+              "KG Var", "KG Yok",
+              "HND1", "HNDX", "HND2", "HND2-1", "HND2-X", "HND2-2",
+              "IY AU 0.5 Alt", "IY AU 0.5 Ust", "IY AU 1.5 Alt", "IY AU 1.5 Ust",
+              "IY/MS 1/1", "IY/MS 1/X", "IY/MS 1/2",
+              "IY/MS X/1", "IY/MS X/X", "IY/MS X/2",
+              "IY/MS 2/1", "IY/MS 2/X", "IY/MS 2/2",
+              "TG 0-1", "TG 2-3", "TG 4-5", "TG 6+",
+              "T1 1.5 Ust", "T1 2.5 Ust", "T2 1.5 Ust", "T2 2.5 Ust",
+          ]
+
+          # Yeni günlük dosyaları bul
+          dun = (dt.date.today() - dt.timedelta(days=1)).strftime('%Y-%m-%d')
+          new_files = list(OUTPUT.glob(f"gunluk_{dun}.xlsx"))
+          if not new_files:
+              print("Yeni dosya yok, çıkılıyor.")
+              sys.exit(0)
+
+          def read_excel_df(path):
+              try:
+                  df = pd.read_excel(path, dtype=str)
+                  # Header satırı 2. satırda olabilir (eski format)
+                  if df.columns[0].startswith("Sütun") or df.columns[0].startswith("S?tun"):
+                      df = pd.read_excel(path, header=1, dtype=str)
+                  # Kolon adlarını normalize et
+                  rename = {"Konuk Ekip": "Deplasman", "konuk ekip": "Deplasman"}
+                  df = df.rename(columns=rename)
+                  for h in HEADERS:
+                      if h not in df.columns:
+                          df[h] = ""
+                  return df[HEADERS].copy()
+              except Exception as e:
+                  print(f"Okunamadı {path}: {e}")
+                  return None
+
+          # Mevcut FINAL'i oku
+          if FINAL.exists():
+              df_final = read_excel_df(FINAL)
+              print(f"Mevcut FINAL: {len(df_final):,} satır")
+          else:
+              df_final = pd.DataFrame(columns=HEADERS)
+              print("FINAL dosya yok, sıfırdan oluşturuluyor.")
+
+          # Yeni satırları ekle
+          new_dfs = []
+          for f in new_files:
+              d = read_excel_df(f)
+              if d is not None and len(d) > 0:
+                  new_dfs.append(d)
+                  print(f"  + {f.name}: {len(d)} satır")
+
+          if not new_dfs:
+              print("Eklenecek satır yok.")
+              sys.exit(0)
+
+          df_all = pd.concat([df_final] + new_dfs, ignore_index=True)
+
+          # Duplikat temizle (Ev Sahibi + Deplasman + Tarih + Saat)
+          dup_keys = ["Ev Sahibi", "Deplasman", "Tarih", "Saat"]
+          before = len(df_all)
+          df_all = df_all.drop_duplicates(subset=dup_keys, keep="last")
+          print(f"Duplikat silindi: {before - len(df_all)}, kalan: {len(df_all):,}")
+
+          # Tarihe göre sırala
+          def parse_date(v):
+              for fmt in ('%d.%m.%Y', '%Y-%m-%d', '%d/%m/%Y'):
+                  try:
+                      return dt.datetime.strptime(str(v).strip(), fmt).date()
+                  except Exception:
+                      pass
+              return dt.date(1900,1,1)
+
+          df_all['_sort'] = df_all['Tarih'].apply(parse_date)
+          df_all = df_all.sort_values('_sort').drop(columns=['_sort']).reset_index(drop=True)
+
+          # FINAL'e kaydet
+          wb = Workbook()
+          ws = wb.active
+          ws.title = "MS Oranlari"
+          hfill = PatternFill("solid", fgColor="2E7D32")
+          hfont = Font(color="FFFFFF", bold=True)
+          ws.append(HEADERS)
+          for cell in ws[1]:
+              cell.fill = hfill
+              cell.font = hfont
+              cell.alignment = Alignment(horizontal="center")
+          for _, row in df_all.iterrows():
+              ws.append([None if (v is None or (isinstance(v, float) and np.isnan(v))) else str(v) if v != "" else None
+                         for v in row])
+          for col in ws.columns:
+              w = max((len(str(c.value or "")) for c in col), default=8)
+              ws.column_dimensions[col[0].column_letter].width = min(w + 2, 40)
+          wb.save(FINAL)
+          print(f"FINAL kaydedildi: {FINAL} ({len(df_all):,} satır)")
+          PYEOF
+
+      - name: Commit FINAL to repo
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          DUN=$(date -d 'yesterday' +'%Y-%m-%d')
+          git add -f output/iddaagecmismaclar_FINAL.xlsx output/gunluk_${DUN}.xlsx || true
+          git diff --staged --quiet || git commit -m "gunluk: $DUN maclari eklendi $(date +'%H:%M')"
+          git push || true
